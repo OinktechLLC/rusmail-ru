@@ -14,6 +14,7 @@ export interface Email {
   starred: boolean
   spam: boolean
   labels: string[]
+  providerId?: string
   attachments?: { name: string; size: number; type: string }[]
 }
 
@@ -25,6 +26,11 @@ export interface Label {
 
 export interface EmailAccount {
   email: string
+  login: string
+  domain: string
+  password?: string
+  token?: string
+  api: 'mail.tm' | '1secmail'
   createdAt: string
   lastActivity: string
   expiresAt: string
