@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useEmailStore, Email, Label } from '@/lib/store'
-import { emailService, EmailAccount } from '@/lib/email-service'
+import { emailService } from '@/lib/email-service'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -60,8 +60,10 @@ export function EmailDashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
   const [copied, setCopied] = useState(false)
   const [newLabelDialogOpen, setNewLabelDialogOpen] = useState(false)
+  const [loadingError, setLoadingError] = useState<string | null>(null)
   const [newLabelName, setNewLabelName] = useState('')
   const [newLabelColor, setNewLabelColor] = useState('#3b82f6')
   
@@ -94,27 +96,49 @@ export function EmailDashboard() {
 
   // Initialize email account
   useEffect(() => {
-    async function initAccount() {
-      if (account) {
-        emailService.setAccount(account as EmailAccount & { api: string })
-        setIsLoading(false)
-        return
+    let cancelled = false
+
+    async function createAndStoreAccount() {
+      const newAccount = await emailService.createAccount()
+      if (!newAccount) {
+        throw new Error('Не удалось найти рабочий API для создания почты')
       }
 
-      const newAccount = await emailService.createAccount()
-      if (newAccount) {
-        setAccount({
-          email: newAccount.email,
-          createdAt: newAccount.createdAt,
-          lastActivity: newAccount.lastActivity,
-          expiresAt: newAccount.expiresAt,
-        })
+      if (!cancelled) {
+        setAccount(newAccount)
       }
-      setIsLoading(false)
+    }
+
+    async function initAccount() {
+      setLoadingError(null)
+
+      try {
+        if (account) {
+          if (emailService.setAccount(account)) {
+            setIsLoading(false)
+            return
+          }
+        }
+
+        await createAndStoreAccount()
+      } catch (error) {
+        console.error('Failed to initialize email account:', error)
+        if (!cancelled) {
+          setLoadingError(error instanceof Error ? error.message : 'Не удалось создать почтовый ящик')
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+        }
+      }
     }
 
     initAccount()
-  }, [account, setAccount])
+
+    return () => {
+      cancelled = true
+    }
+  }, [account, retryKey, setAccount])
 
   // Fetch emails periodically
   const fetchEmails = useCallback(async () => {
@@ -123,6 +147,13 @@ export function EmailDashboard() {
     setIsRefreshing(true)
     try {
       const messages = await emailService.getMessages()
+      const activeAccount = emailService.getAccount()
+
+      if (activeAccount && activeAccount.email !== account.email) {
+        setAccount(activeAccount)
+        setEmails(messages as Email[])
+        return
+      }
       
       // Merge with existing emails to preserve local state (starred, labels, etc.)
       const existingEmailMap = new Map(emails.map(e => [e.id, e]))
@@ -140,7 +171,7 @@ export function EmailDashboard() {
       console.error('Failed to fetch emails:', error)
     }
     setIsRefreshing(false)
-  }, [account, emails, setEmails])
+  }, [account, emails, setAccount, setEmails])
 
   useEffect(() => {
     if (account && !isLoading) {
@@ -250,6 +281,22 @@ export function EmailDashboard() {
         <div className="flex flex-col items-center gap-4">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
           <p className="text-muted-foreground">Создание почтового ящика...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (loadingError && !emailService.getAccount()) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background p-6">
+        <div className="max-w-md rounded-lg border bg-card p-6 text-center shadow-sm">
+          <AlertCircle className="mx-auto mb-4 h-10 w-10 text-destructive" />
+          <h1 className="mb-2 text-xl font-semibold text-foreground">Почта временно недоступна</h1>
+          <p className="mb-4 text-sm text-muted-foreground">{loadingError}</p>
+          <Button onClick={() => {
+            setIsLoading(true)
+            setRetryKey((key) => key + 1)
+          }}>Попробовать снова</Button>
         </div>
       </div>
     )
@@ -695,7 +742,7 @@ export function EmailDashboard() {
                     className={`h-8 w-8 rounded-full transition-transform ${
                       newLabelColor === color ? 'scale-110 ring-2 ring-offset-2 ring-offset-background' : ''
                     }`}
-                    style={{ backgroundColor: color, ringColor: color }}
+                    style={{ backgroundColor: color }}
                   />
                 ))}
               </div>
